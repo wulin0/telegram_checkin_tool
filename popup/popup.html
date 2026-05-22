@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Telegram 签到助手</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <!-- Header -->
+    <header class="header">
+      <div class="header-left">
+        <span class="logo">🤖</span>
+        <h1>TG 签到助手</h1>
+      </div>
+      <label class="switch" title="全局开关">
+        <input type="checkbox" id="globalToggle">
+        <span class="switch-slider"></span>
+      </label>
+    </header>
+
+    <!-- Tab 导航 -->
+    <nav class="tabs">
+      <button class="tab active" data-tab="groups">📋 群组</button>
+      <button class="tab" data-tab="add">➕ 添加</button>
+      <button class="tab" data-tab="settings">⚙️ 设置</button>
+      <button class="tab" data-tab="logs">📝 日志</button>
+    </nav>
+
+    <!-- Tab 内容区 -->
+    <main class="main-content">
+
+      <!-- Tab 1: 群组列表 -->
+      <section class="tab-content active" id="tab-groups">
+        <div class="toolbar">
+          <button class="btn btn-primary" id="btnManualCheckin" title="立即执行签到">
+            ▶️ 手动签到
+          </button>
+          <button class="btn btn-danger btn-small" id="btnClearHistory" title="清空签到历史">
+            清空历史
+          </button>
+        </div>
+        <div class="group-list" id="groupList">
+          <div class="empty-state">
+            <span class="empty-icon">📭</span>
+            <p>还没有添加任何群组</p>
+            <p class="empty-hint">切换到"添加"标签页来添加群组</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Tab 2: 添加群组 -->
+      <section class="tab-content" id="tab-add">
+        <form id="addGroupForm">
+          <div class="form-group">
+            <label for="keyword">签到关键词</label>
+            <input type="text" id="keyword" placeholder="例如: /checkin, 签到, /start" required>
+            <span class="form-hint">该群机器人需要的签到命令</span>
+          </div>
+          <div class="form-group">
+            <label for="groupNames">群组名称（每行一个）</label>
+            <textarea id="groupNames" rows="5" placeholder="每日签到群&#10;XX社区签到&#10;YY交流群签到" required></textarea>
+            <span class="form-hint">相同关键词的群组可以批量添加，一行一个群名</span>
+          </div>
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary" id="btnAdd">✅ 添加群组</button>
+          </div>
+        </form>
+        <div class="add-preview" id="addPreview" style="display:none;">
+          <h3>将要添加的群组：</h3>
+          <ul id="previewList"></ul>
+        </div>
+        <div class="add-result" id="addResult" style="display:none;"></div>
+      </section>
+
+      <!-- Tab 3: 设置 -->
+      <section class="tab-content" id="tab-settings">
+        <form id="settingsForm">
+          <div class="form-group">
+            <label for="baseTime">基准签到时间</label>
+            <input type="time" id="baseTime" value="08:00">
+            <span class="form-hint">实际签到时间会在 ±随机偏移范围内波动</span>
+          </div>
+          <div class="form-group">
+            <label for="timeJitter">时间随机偏移（分钟）</label>
+            <div class="range-group">
+              <input type="range" id="timeJitter" min="5" max="60" value="20" step="5">
+              <span class="range-value" id="timeJitterVal">±20 分钟</span>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>操作延迟范围（毫秒）</label>
+            <div class="range-group">
+              <span>最短</span>
+              <input type="number" id="actionDelayMin" min="200" max="5000" value="800" step="100" class="input-small">
+              <span>〜 最长</span>
+              <input type="number" id="actionDelayMax" min="500" max="10000" value="3000" step="100" class="input-small">
+            </div>
+          </div>
+          <div class="form-group">
+            <label>打字速度（毫秒/字符）</label>
+            <div class="range-group">
+              <span>最快</span>
+              <input type="number" id="typingSpeedMin" min="20" max="500" value="50" step="10" class="input-small">
+              <span>〜 最慢</span>
+              <input type="number" id="typingSpeedMax" min="50" max="1000" value="150" step="10" class="input-small">
+            </div>
+          </div>
+          <div class="form-group checkbox-group">
+            <label>
+              <input type="checkbox" id="checkAlreadySigned" checked>
+              智能判断已签到（避免重复签到）
+            </label>
+          </div>
+          <div class="form-group checkbox-group">
+            <label>
+              <input type="checkbox" id="stopOnVerification" checked>
+              遇到验证码立即停止所有操作
+            </label>
+          </div>
+          <div class="form-group checkbox-group">
+            <label>
+              <input type="checkbox" id="notificationEnabled" checked>
+              桌面通知
+            </label>
+          </div>
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary">💾 保存设置</button>
+          </div>
+        </form>
+      </section>
+
+      <!-- Tab 4: 日志 -->
+      <section class="tab-content" id="tab-logs">
+        <div class="log-filter">
+          <select id="logLevelFilter">
+            <option value="all">全部级别</option>
+            <option value="info">Info</option>
+            <option value="warn">⚠️ Warn</option>
+            <option value="error">❌ Error</option>
+          </select>
+          <button class="btn btn-small" id="btnRefreshLogs">🔄 刷新</button>
+          <button class="btn btn-small btn-danger" id="btnClearLogs">清空</button>
+        </div>
+        <div class="log-list" id="logList">
+          <div class="empty-state">
+            <p>暂无日志</p>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Footer -->
+    <footer class="footer">
+      <span class="status-indicator" id="statusIndicator">● 就绪</span>
+      <span class="version">v1.0.0</span>
+    </footer>
+  </div>
+
+  <script src="../lib/storage.js"></script>
+  <script src="../lib/logger.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

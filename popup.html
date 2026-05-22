@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=520">
+  <title>TG 签到助手</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <!-- 头部 -->
+    <header class="header">
+      <div class="header-title">
+        <span class="logo">✅</span>
+        <h1>TG 签到助手</h1>
+      </div>
+      <label class="toggle-switch">
+        <input type="checkbox" id="masterToggle">
+        <span class="toggle-slider"></span>
+      </label>
+    </header>
+
+    <!-- 状态栏 -->
+    <div class="status-bar" id="statusBar">
+      <span class="status-dot" id="statusDot"></span>
+      <span id="statusText">未启用</span>
+    </div>
+
+    <!-- 标签页 -->
+    <nav class="tabs">
+      <button class="tab active" data-tab="groups">群组</button>
+      <button class="tab" data-tab="settings">设置</button>
+      <button class="tab" data-tab="logs">日志</button>
+    </nav>
+
+    <!-- 群组管理 -->
+    <section class="tab-content active" id="tab-groups">
+      <div class="section-header">
+        <h2>签到群组</h2>
+        <div class="header-actions">
+          <button class="btn btn-accent" id="checkinNowBtn" title="立即执行选中群组的签到">⚡ 立即签到</button>
+          <button class="btn-icon" id="addGroupBtn" title="添加群组">+</button>
+        </div>
+      </div>
+      <div id="groupList" class="group-list">
+        <div class="empty-state">暂无群组，点击 + 添加</div>
+      </div>
+
+      <!-- 添加/编辑群组表单 -->
+      <div class="modal-overlay" id="groupModal" style="display:none">
+        <div class="modal">
+          <div class="modal-header">
+            <h3 id="modalTitle">添加群组</h3>
+            <button class="btn-icon modal-close" id="modalClose">&times;</button>
+          </div>
+          <div class="modal-body">
+            <div class="form-group">
+              <label>群组名称 <span class="hint">（多个群组换行分隔，可批量添加）</span></label>
+              <textarea id="groupName" rows="3" placeholder="群组A&#10;群组B&#10;群组C"></textarea>
+            </div>
+            <div class="form-group">
+              <label>签到模式</label>
+              <select id="triggerMode">
+                <option value="command">命令签到（如 /checkin）</option>
+                <option value="button">按钮签到（点击特定按钮）</option>
+                <option value="keyword">关键词触发</option>
+              </select>
+            </div>
+            <div class="form-group" id="commandGroup">
+              <label>签到命令</label>
+              <input type="text" id="checkinCommand" placeholder="/checkin" value="/checkin">
+            </div>
+            <div class="form-group" id="buttonGroup" style="display:none">
+              <label>按钮选择器</label>
+              <input type="text" id="buttonSelector" placeholder="CSS 选择器">
+            </div>
+            <div class="form-group">
+              <label>已签到关键词（逗号分隔）</label>
+              <input type="text" id="checkinKeywords" placeholder="已经签到,已签到,already checked in">
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary" id="modalCancel">取消</button>
+            <button class="btn btn-primary" id="modalSave">保存</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 设置面板 -->
+    <section class="tab-content" id="tab-settings">
+      <div class="form-group">
+        <label>全局基准签到时间</label>
+        <input type="time" id="globalBaseTime" value="08:00">
+      </div>
+      <div class="form-group">
+        <label>全局时间偏移（±分钟）</label>
+        <input type="number" id="globalJitter" value="20" min="0" max="120">
+      </div>
+      <div class="form-group">
+        <label>操作最小延迟（ms）</label>
+        <input type="number" id="delayMin" value="800" min="200" max="5000" step="100">
+      </div>
+      <div class="form-group">
+        <label>操作最大延迟（ms）</label>
+        <input type="number" id="delayMax" value="3000" min="500" max="10000" step="100">
+      </div>
+      <div class="form-group">
+        <label>最大重试次数</label>
+        <input type="number" id="maxRetry" value="2" min="0" max="5">
+      </div>
+      <button class="btn btn-primary btn-block" id="saveSettings">保存设置</button>
+      <button class="btn btn-danger btn-block" id="resetAll">重置所有数据</button>
+    </section>
+
+    <!-- 日志面板 -->
+    <section class="tab-content" id="tab-logs">
+      <div class="section-header">
+        <h2>签到日志</h2>
+        <button class="btn-icon" id="clearLogsBtn" title="清空日志">🗑</button>
+      </div>
+      <div id="logList" class="log-list">
+        <div class="empty-state">暂无日志</div>
+      </div>
+    </section>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
