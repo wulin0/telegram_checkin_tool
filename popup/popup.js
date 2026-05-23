@@ -40,10 +40,246 @@
   // 状态
   const statusIndicator = $('#statusIndicator');
 
+  // ═════════════════════════════════════
+  // ─── 水群模块 ───
+  // ═════════════════════════════════════
+
+  const waterToggle = $('#waterToggle');
+  const waterStatus = $('#waterStatus');
+  const waterMsgList = $('#waterMsgList');
+  const waterMsgInput = $('#waterMsgInput');
+  const btnAddWaterMsg = $('#btnAddWaterMsg');
+  const waterTargetGroups = $('#waterTargetGroups');
+  const waterIntervalMin = $('#waterIntervalMin');
+  const waterIntervalMax = $('#waterIntervalMax');
+  const waterActiveStart = $('#waterActiveStart');
+  const waterActiveEnd = $('#waterActiveEnd');
+  const btnSaveWater = $('#btnSaveWater');
+  const btnWaterTest = $('#btnWaterTest');
+  const waterHistoryList = $('#waterHistoryList');
+
+  /** 渲染水群消息列表 */
+  async function renderWaterMessages() {
+    const ws = await Storage.getWaterSettings();
+    const msgs = ws.messages || [];
+
+    if (msgs.length === 0) {
+      waterMsgList.innerHTML = '<div class="empty-state"><p>暂无水群消息</p></div>';
+      return;
+    }
+
+    waterMsgList.innerHTML = msgs.map(m => `
+      <div class="water-msg-card" data-id="${m.id}">
+        <div class="water-msg-text">${escapeHtml(m.text)}</div>
+        <div class="water-msg-actions">
+          <button class="btn-icon btn-edit-msg" title="编辑" data-id="${m.id}">✏️</button>
+          <button class="btn-icon btn-delete-msg" title="删除" data-id="${m.id}">🗑️</button>
+        </div>
+      </div>
+    `).join('');
+
+    // 绑定删除按钮
+    waterMsgList.querySelectorAll('.btn-delete-msg').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const id = btn.dataset.id;
+        if (confirm('确定删除这条水群消息吗？')) {
+          await Storage.removeWaterMessage(id);
+          renderWaterMessages();
+          updateWaterStatus('消息已删除');
+        }
+      });
+    });
+
+    // 绑定编辑按钮
+    waterMsgList.querySelectorAll('.btn-edit-msg').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const id = btn.dataset.id;
+        const ws = await Storage.getWaterSettings();
+        const msg = ws.messages.find(m => m.id === id);
+        if (!msg) return;
+        const newText = prompt('编辑水群消息：', msg.text);
+        if (newText && newText.trim()) {
+          await Storage.updateWaterMessage(id, newText.trim());
+          renderWaterMessages();
+          updateWaterStatus('消息已更新');
+        }
+      });
+    });
+  }
+
+  /** 渲染水群历史 */
+  async function renderWaterHistory() {
+    try {
+      const history = await Storage.getWaterHistory(50);
+      if (history.length === 0) {
+        waterHistoryList.innerHTML = '<div class="empty-state"><p>暂无记录</p></div>';
+        return;
+      }
+      waterHistoryList.innerHTML = history.map(h => {
+        const time = new Date(h.timestamp).toLocaleTimeString('zh-CN', {
+          hour: '2-digit', minute: '2-digit', second: '2-digit'
+        });
+        const cls = h.success ? 'success' : 'fail';
+        const icon = h.success ? '✅' : '❌';
+        return `
+          <div class="water-history-item ${cls}">
+            <span class="water-hist-time">${time}</span>
+            <span class="water-hist-group">${escapeHtml(h.groupName || '—')}</span>
+            <span class="water-hist-msg">${escapeHtml((h.message || '').slice(0, 20))}</span>
+            <span class="water-hist-result">${icon} ${escapeHtml((h.result || '').slice(0, 15))}</span>
+          </div>
+        `;
+      }).join('');
+    } catch (e) {
+      waterHistoryList.innerHTML = '<div class="empty-state"><p>加载失败</p></div>';
+    }
+  }
+
+  /** 更新水群状态显示 */
+  function updateWaterStatus(message) {
+    if (message) {
+      waterStatus.textContent = '● ' + message;
+      clearTimeout(waterStatus._timeout);
+      waterStatus._timeout = setTimeout(() => {
+        refreshWaterStatus();
+      }, 5000);
+    } else {
+      refreshWaterStatus();
+    }
+  }
+
+  async function refreshWaterStatus() {
+    const ws = await Storage.getWaterSettings();
+    const state = await Storage.getWaterState();
+    if (ws.enabled) {
+      const next = state.nextRunTime ? new Date(state.nextRunTime).toLocaleTimeString('zh-CN') : '等待中';
+      waterStatus.textContent = '● 已启用 | 下次发送: ' + next + ' | 今日: ' + (state.todayCount || 0) + ' 条';
+      waterStatus.style.color = 'var(--success)';
+    } else {
+      waterStatus.textContent = '● 未启用';
+      waterStatus.style.color = 'var(--text-muted)';
+    }
+  }
+
+  // 水群开关
+  waterToggle.addEventListener('change', async () => {
+    const enabled = waterToggle.checked;
+    await Storage.updateWaterSettings({ enabled });
+    updateWaterStatus(enabled ? '水群已启用' : '水群已禁用');
+
+    if (enabled) {
+      chrome.runtime.sendMessage({ action: 'toggle_water_chat' }, (resp) => {
+        if (resp?.ok) updateWaterStatus('水群闹钟已设置');
+      });
+    } else {
+      chrome.runtime.sendMessage({ action: 'toggle_water_chat' }, (resp) => {
+        if (resp?.ok) updateWaterStatus('水群已禁用');
+      });
+    }
+  });
+
+  // 添加水群消息
+  btnAddWaterMsg.addEventListener('click', async () => {
+    const text = waterMsgInput.value.trim();
+    if (!text) {
+      updateWaterStatus('请输入水群消息内容');
+      return;
+    }
+    await Storage.addWaterMessage(text);
+    waterMsgInput.value = '';
+    await renderWaterMessages();
+    updateWaterStatus('消息已添加');
+  });
+
+  // 回车添加消息
+  waterMsgInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      btnAddWaterMsg.click();
+    }
+  });
+
+  // 保存水群设置
+  btnSaveWater.addEventListener('click', async () => {
+    const targetGroupsRaw = waterTargetGroups.value.trim();
+    const targetGroups = targetGroupsRaw
+      ? targetGroupsRaw.split('\n').map(g => g.trim()).filter(Boolean)
+      : [];
+
+    const settings = {
+      intervalMin: parseInt(waterIntervalMin.value) || 30,
+      intervalMax: parseInt(waterIntervalMax.value) || 60,
+      targetGroups: targetGroups,
+      activeHoursStart: waterActiveStart.value || '08:00',
+      activeHoursEnd: waterActiveEnd.value || '23:00',
+    };
+
+    if (settings.intervalMin > settings.intervalMax) {
+      updateWaterStatus('最短间隔不能大于最长间隔');
+      return;
+    }
+    if (settings.intervalMin < 1) {
+      updateWaterStatus('最短间隔至少为 1 分钟');
+      return;
+    }
+
+    await Storage.updateWaterSettings(settings);
+    updateWaterStatus('✅ 水群设置已保存');
+
+    const ws = await Storage.getWaterSettings();
+    if (ws.enabled) {
+      chrome.runtime.sendMessage({ action: 'toggle_water_chat' }, () => {});
+    }
+  });
+
+  // 单次发送水群消息测试
+  btnWaterTest.addEventListener('click', async () => {
+    // 先保存当前设置
+    const targetGroupsRaw = waterTargetGroups.value.trim();
+    const targetGroups = targetGroupsRaw
+      ? targetGroupsRaw.split('\n').map(g => g.trim()).filter(Boolean)
+      : [];
+
+    await Storage.updateWaterSettings({
+      intervalMin: parseInt(waterIntervalMin.value) || 30,
+      intervalMax: parseInt(waterIntervalMax.value) || 60,
+      targetGroups: targetGroups,
+      activeHoursStart: waterActiveStart.value || '08:00',
+      activeHoursEnd: waterActiveEnd.value || '23:00',
+    });
+
+    const ws = await Storage.getWaterSettings();
+    const msgs = ws.messages || [];
+    if (msgs.length === 0) {
+      updateWaterStatus('❌ 请先添加水群消息');
+      return;
+    }
+
+    btnWaterTest.disabled = true;
+    btnWaterTest.textContent = '⏳ 发送中...';
+    updateWaterStatus('🚀 正在执行水群发送...');
+
+    // 通知 background 触发一次水群
+    chrome.runtime.sendMessage({ action: 'manual_water_chat' }, (response) => {
+      btnWaterTest.disabled = false;
+      btnWaterTest.textContent = '▶ 单次发送';
+      if (response && response.ok) {
+        updateWaterStatus('✅ 单次水群已触发，请查看发送记录');
+        setTimeout(() => renderWaterHistory(), 5000);
+        setTimeout(() => renderWaterHistory(), 10000);
+      } else {
+        const err = response ? response.error : 'response 为空';
+        updateWaterStatus('❌ 触发失败: ' + err);
+      }
+    });
+  });
+
   // ─── 标签页切换 ───
 
   tabs.forEach(tab => {
-    tab.addEventListener('click', () => {
+    tab.addEventListener('click', async () => {
       const target = tab.dataset.tab;
       tabs.forEach(t => t.classList.remove('active'));
       tab.classList.add('active');
@@ -54,6 +290,12 @@
       if (target === 'groups') renderGroups();
       if (target === 'logs') renderLogs();
       if (target === 'settings') loadSettings();
+      if (target === 'water') {
+        await loadWaterSettings();
+        await renderWaterMessages();
+        await renderWaterHistory();
+        await refreshWaterStatus();
+      }
     });
   });
 
@@ -283,6 +525,17 @@
     $('#notificationEnabled').checked = settings.notificationEnabled;
   }
 
+  /** 加载水群设置到 UI */
+  async function loadWaterSettings() {
+    const ws = await Storage.getWaterSettings();
+    waterToggle.checked = !!ws.enabled;
+    waterIntervalMin.value = ws.intervalMin || 30;
+    waterIntervalMax.value = ws.intervalMax || 60;
+    waterActiveStart.value = ws.activeHoursStart || '08:00';
+    waterActiveEnd.value = ws.activeHoursEnd || '23:00';
+    waterTargetGroups.value = (ws.targetGroups || []).join('\n');
+  }
+
   // 时间抖动滑块
   timeJitter.addEventListener('input', () => {
     $('#timeJitterVal').textContent = `±${timeJitter.value} 分钟`;
@@ -437,6 +690,10 @@
 
     // 加载群组列表
     await renderGroups();
+
+    // 加载水群状态
+    await loadWaterSettings();
+    await refreshWaterStatus();
   }
 
   init();

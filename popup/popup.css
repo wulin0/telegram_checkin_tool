@@ -225,6 +225,22 @@ body {
   background: var(--danger-hover);
 }
 
+.btn-outline {
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+}
+
+.btn-outline:hover {
+  background: var(--accent);
+  color: white;
+}
+
+.btn-outline:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .btn-small {
   padding: 4px 10px;
   font-size: 11px;
@@ -529,7 +545,171 @@ body {
 }
 
 /* ============================================
-   日志
+   水群
+   ============================================ */
+
+.water-header {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.water-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.water-title {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.water-status {
+  font-size: 12px;
+  color: var(--text-muted);
+  transition: color 0.3s;
+}
+
+.water-section {
+  margin-bottom: 16px;
+}
+
+.water-section .section-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.water-msg-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 10px;
+  max-height: 150px;
+  overflow-y: auto;
+}
+
+.water-msg-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  gap: 8px;
+}
+
+.water-msg-text {
+  flex: 1;
+  font-size: 12px;
+  color: var(--text-primary);
+  word-break: break-all;
+  line-height: 1.4;
+}
+
+.water-msg-actions {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.water-add-msg {
+  display: flex;
+  gap: 6px;
+}
+
+.water-add-msg .input-full {
+  flex: 1;
+}
+
+.input-full {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  color: var(--text-primary);
+  background: var(--bg-primary);
+  transition: border-color 0.15s;
+  font-family: inherit;
+}
+
+.input-full:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(51, 144, 236, 0.15);
+}
+
+.water-history {
+  margin-top: 12px;
+}
+
+.water-history-list {
+  max-height: 180px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+}
+
+.water-history-item {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.water-history-item:last-child {
+  border-bottom: none;
+}
+
+.water-history-item.success {
+  background: #f0fdf4;
+}
+
+.water-history-item.fail {
+  background: #fef2f2;
+}
+
+.water-hist-time {
+  color: var(--text-muted);
+  min-width: 55px;
+}
+
+.water-hist-group {
+  color: var(--accent);
+  font-weight: 600;
+  min-width: 60px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.water-hist-msg {
+  flex: 1;
+  color: var(--text-secondary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.water-hist-result {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+/* ============================================
+   群组卡片 + 日志 (原有样式)
    ============================================ */
 
 .log-filter {

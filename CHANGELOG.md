@@ -1,5 +1,46 @@
 # 变更日志 — Telegram 智能签到助手
 
+## v1.1.2 (2026-05-23) — 新增单次发送验证按钮
+
+### 新增功能
+- **单次发送按钮**（水群标签页 → "▶ 单次发送"）：手动触发一次水群，发送后可立即查看结果，验证配置是否正确
+  - 点击前自动保存当前设置
+  - 发送中按钮显示 "⏳ 发送中..." 并禁用
+  - 完成后自动刷新发送记录
+
+### 样式
+- 新增 `.btn-outline` 按钮样式（水群单次发送按钮使用）
+
+## v1.1.1 (2026-05-23) — 修复水群模块问题 + 增加防御机制
+
+### 🐛 修复
+- **popup.js 按钮全部失效**：tab click handler 中 `await` 未配合 `async` 导致语法错误，整个 popup 脚本加载失败
+
+### 🛡️ 安全防御（防限流/封号）
+- **每日发送上限**：默认 50 条/天，超出后自动跳过
+- **速率限制检测**：检测到 Telegram "Too many requests" 等错误时自动禁用
+- **跨日计数重置**：每日发送次数按天统计，跨日自动归零
+
+### 新增功能：自动水群
+- **多条水群消息**：用户可设置多条水群消息，插件每次随机选取一条发送
+- **随机间隔发送**：支持设置最短/最长时间间隔（分钟），每次发送后随机等待
+- **目标群组选择**：可指定水群目标群组，留空则自动使用所有已启用群组
+- **活跃时段控制**：仅在水群活跃时段内发送消息
+- **今日发送记录**：Popup 内实时查看今日水群发送记录
+- **风控自动停止**：遇到验证码/风控时自动禁用水群
+- **后台调度**：通过 `tg_water_chat` 闹钟驱动，随机间隔调度
+
+### 文件变更
+| 文件 | 变更 |
+|------|------|
+| `lib/storage.js` | 新增 `getWaterSettings`/`updateWaterSettings`/`addWaterMessage`/`removeWaterMessage`/`getWaterState`/`getWaterHistory` 等 |
+| `background.js` | 新增 `handleWaterChat`/`scheduleNextWaterChat`/`dispatchWaterChatToTab`/`isWithinActiveHours` |
+| `content.js` | 新增 `sendWaterMessage`/`runSingleWaterChat`，响应 `runWaterChat`/`testWaterChat` 消息 |
+| `popup/popup.html` | 新增「💬 水群」标签页 |
+| `popup/popup.js` | 新增水群 UI 交互逻辑（消息增删改、设置保存、历史渲染）|
+| `popup/popup.css` | 新增水群相关样式 |
+| `manifest.json` | 版本号升级至 1.1.0 |
+
 ## v1.0.1 (2026-05-20) — 7轮修复
 
 ### 修复 #7: cleanupSearch Escape 键导致跳回搜索对话框

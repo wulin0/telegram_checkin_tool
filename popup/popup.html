@@ -24,6 +24,7 @@
     <nav class="tabs">
       <button class="tab active" data-tab="groups">📋 群组</button>
       <button class="tab" data-tab="add">➕ 添加</button>
+      <button class="tab" data-tab="water">💬 水群</button>
       <button class="tab" data-tab="settings">⚙️ 设置</button>
       <button class="tab" data-tab="logs">📝 日志</button>
     </nav>
@@ -74,7 +75,75 @@
         <div class="add-result" id="addResult" style="display:none;"></div>
       </section>
 
-      <!-- Tab 3: 设置 -->
+      <!-- Tab 3: 水群 -->
+      <section class="tab-content" id="tab-water">
+        <div class="water-header">
+          <div class="water-toggle-row">
+            <span class="water-title">💬 水群助手</span>
+            <label class="switch">
+              <input type="checkbox" id="waterToggle">
+              <span class="switch-slider"></span>
+            </label>
+          </div>
+          <div class="water-status" id="waterStatus">● 状态: 未启用</div>
+          <button class="btn btn-outline btn-small" id="btnWaterTest">▶ 单次发送</button>
+        </div>
+
+        <!-- 水群消息管理 -->
+        <div class="water-section">
+          <div class="section-title">📝 水群消息（随机发送）</div>
+          <div id="waterMsgList" class="water-msg-list">
+            <div class="empty-state"><p>暂无水群消息</p></div>
+          </div>
+          <div class="water-add-msg">
+            <input type="text" id="waterMsgInput" placeholder="输入水群消息内容..." class="input-full">
+            <button class="btn btn-primary btn-small" id="btnAddWaterMsg">添加</button>
+          </div>
+        </div>
+
+        <!-- 目标群组 -->
+        <div class="water-section">
+          <div class="section-title">👥 目标群组（每行一个，留空则使用所有已启用群组）</div>
+          <textarea id="waterTargetGroups" rows="3" placeholder="XX社区&#10;YY交流群&#10;留空则自动使用所有已启用群组" class="input-full"></textarea>
+        </div>
+
+        <!-- 发送间隔 -->
+        <div class="water-section">
+          <div class="section-title">⏱️ 发送间隔</div>
+          <div class="range-group">
+            <span>最短</span>
+            <input type="number" id="waterIntervalMin" min="1" max="180" value="30" class="input-small">
+            <span>〜 最长</span>
+            <input type="number" id="waterIntervalMax" min="1" max="180" value="60" class="input-small">
+            <span>分钟</span>
+          </div>
+        </div>
+
+        <!-- 活跃时段 -->
+        <div class="water-section">
+          <div class="section-title">🌙 活跃时段（仅此时段发送）</div>
+          <div class="range-group">
+            <span>开始</span>
+            <input type="time" id="waterActiveStart" value="08:00">
+            <span>〜 结束</span>
+            <input type="time" id="waterActiveEnd" value="23:00">
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button class="btn btn-primary" id="btnSaveWater">💾 保存水群设置</button>
+        </div>
+
+        <!-- 水群历史 -->
+        <div class="water-section water-history">
+          <div class="section-title">📜 今日发送记录</div>
+          <div id="waterHistoryList" class="water-history-list">
+            <div class="empty-state"><p>暂无记录</p></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Tab 4: 设置（原 Tab 3） -->
       <section class="tab-content" id="tab-settings">
         <form id="settingsForm">
           <div class="form-group">
@@ -131,7 +200,7 @@
         </form>
       </section>
 
-      <!-- Tab 4: 日志 -->
+      <!-- Tab 5: 日志 -->
       <section class="tab-content" id="tab-logs">
         <div class="log-filter">
           <select id="logLevelFilter">

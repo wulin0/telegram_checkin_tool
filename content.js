@@ -318,6 +318,20 @@
     return false;
   }
 
+  /** 检测 Telegram 速率限制（Too many requests） */
+  function checkRateLimit() {
+    const bodyText = document.body ? document.body.innerText : '';
+    const pageText = document.documentElement ? document.documentElement.innerText : '';
+    const combined = (bodyText + ' ' + pageText).toLowerCase();
+    return (
+      combined.includes('too many requests') ||
+      combined.includes('oops') ||
+      combined.includes('限流') ||
+      combined.includes('flood') ||
+      combined.includes('rate limit')
+    );
+  }
+
   // ─── 核心签到流程 ───
 
   /**
@@ -691,6 +705,211 @@
     return Math.floor(Math.random() * (max - min + 1)) + min;
   }
 
+  // ══════════════════════════════════════
+  // ─── 水群引擎 ───
+  // ══════════════════════════════════════
+
+  /**
+   * 向当前打开的群聊发送水群消息
+   */
+  async function sendWaterMessage(messageText, settings) {
+    Logger.info(MODULE, '水群: 准备发送消息');
+
+    // 找到可编辑的消息输入框
+    let messageInput = await waitForEditableInput(15000);
+    if (!messageInput) {
+      Logger.error(MODULE, '水群: 未找到可编辑的消息输入框');
+      return { success: false, message: '未找到输入框' };
+    }
+
+    const isCE = messageInput.isContentEditable || messageInput.contentEditable === 'true';
+    Logger.info(MODULE, '水群: 找到输入框, tag=' + messageInput.tagName + ', ce=' + isCE);
+
+    // 点击 + 聚焦
+    await AntiDetect.humanClick(messageInput, settings);
+    await AntiDetect.humanDelay(settings, 0.5);
+
+    // 模拟输入水群消息
+    Logger.info(MODULE, '水群: 开始输入消息 "' + messageText.slice(0, 30) + '"');
+    await AntiDetect.humanType(messageInput, messageText, settings);
+
+    // 验证输入
+    var currentContent = isCE ? messageInput.textContent : messageInput.value;
+    if (!currentContent || currentContent.length === 0) {
+      Logger.error(MODULE, '水群: 输入框内容为空，输入未生效');
+      return { success: false, message: '输入未生效：内容为空' };
+    }
+
+    await AntiDetect.sleep(600);
+
+    // 发送消息
+    const sendBtn = queryFirst(Selectors.sendButton);
+    if (sendBtn) {
+      await AntiDetect.humanClick(sendBtn, settings);
+      Logger.info(MODULE, '水群: 已点击发送按钮');
+    } else {
+      Logger.info(MODULE, '水群: 未找到发送按钮，使用 Enter 键发送');
+      messageInput.focus();
+      await AntiDetect.sleep(100);
+      const enterBase = {
+        key: 'Enter', code: 'Enter', keyCode: 13, which: 13,
+        bubbles: true, cancelable: true, composed: true,
+      };
+      for (const evtType of ['keydown', 'keypress', 'keyup']) {
+        const opts = { ...enterBase };
+        if (evtType === 'keypress') opts.charCode = 13;
+        messageInput.dispatchEvent(new KeyboardEvent(evtType, opts));
+      }
+    }
+
+    await AntiDetect.humanDelay(settings, 0.5);
+
+    return { success: true, message: '消息已发送' };
+  }
+
+  /**
+   * 执行一次水群任务：随机选群 → 打开 → 随机选消息 → 发送
+   */
+  async function runSingleWaterChat() {
+    Logger.info(MODULE, '========== 执行水群任务 ==========');
+
+    const waterSettings = await Storage.getWaterSettings();
+    if (!waterSettings.enabled) {
+      Logger.info(MODULE, '水群已禁用，跳过');
+      return;
+    }
+
+    const messages = waterSettings.messages || [];
+    if (messages.length === 0) {
+      Logger.warn(MODULE, '水群: 没有配置水群消息');
+      await Storage.addWaterHistory([{
+        groupName: '', message: '', success: false, message: '没有配置水群消息'
+      }]);
+      return;
+    }
+
+    const settings = await Storage.getSettings();
+
+    // 登录检测
+    const isLoggedIn = await checkLoginStatus();
+    if (!isLoggedIn) {
+      Logger.error(MODULE, '水群: 未登录');
+      chrome.runtime.sendMessage({
+        action: 'send_notification',
+        title: '🤖 水群助手',
+        message: 'Telegram 未登录，水群任务暂停',
+      }).catch(() => {});
+      return;
+    }
+
+    // 风控检测
+    if (checkVerificationCaptcha()) {
+      Logger.error(MODULE, '水群: 检测到验证码/风控，停止水群');
+      if (waterSettings.stopOnVerification) {
+        await Storage.updateWaterSettings({ enabled: false });
+        chrome.runtime.sendMessage({
+          action: 'send_notification',
+          title: '⚠️ 水群助手 - 已自动禁用',
+          message: '检测到验证码/风控拦截，水群已自动禁用',
+        }).catch(() => {});
+      }
+      return;
+    }
+
+    // 确定目标群组
+    let targetGroups = waterSettings.targetGroups || [];
+    const allGroups = await Storage.getGroups();
+
+    if (targetGroups.length === 0) {
+      // 未指定目标群组，使用所有启用的群组
+      targetGroups = allGroups.filter(g => g.enabled).map(g => g.name);
+    }
+
+    if (targetGroups.length === 0) {
+      Logger.warn(MODULE, '水群: 没有目标群组');
+      await Storage.addWaterHistory([{
+        groupName: '', message: '', success: false, result: '没有目标群组'
+      }]);
+      return;
+    }
+
+    // 随机选择一个目标群组
+    const groupName = targetGroups[Math.floor(Math.random() * targetGroups.length)];
+
+    // 随机选择一条水群消息
+    const randomMsg = messages[Math.floor(Math.random() * messages.length)];
+
+    Logger.info(MODULE, '水群 → 群组: "' + groupName + '" 消息: "' + randomMsg.text.slice(0, 40) + '"');
+
+    try {
+      // 打开群聊
+      const opened = await openChat(groupName, settings);
+      if (!opened) {
+        Logger.error(MODULE, '水群: 无法打开群聊 "' + groupName + '"');
+        const entry = { groupName: groupName, message: randomMsg.text, success: false, result: '无法打开群聊' };
+        await Storage.addWaterHistory([entry]);
+        chrome.runtime.sendMessage({ action: 'water_chat_complete', results: [entry] }).catch(() => {});
+        return;
+      }
+
+      // 模拟阅读暂停
+      await AntiDetect.readingPause();
+      await AntiDetect.humanDelay(settings, 0.5);
+
+      // 再次检查风控（打开群聊可能触发验证）
+      if (checkVerificationCaptcha()) {
+        Logger.error(MODULE, '水群: 打开群聊后检测到验证码');
+        const entry = { groupName: groupName, message: randomMsg.text, success: false, result: '验证码拦截' };
+        await Storage.addWaterHistory([entry]);
+        chrome.runtime.sendMessage({ action: 'water_chat_complete', results: [entry] }).catch(() => {});
+        return;
+      }
+
+      // 发送水群消息
+      const result = await sendWaterMessage(randomMsg.text, settings);
+
+      // ── 防御4: 检测 Telegram 速率限制 ──
+      if (!result.success && checkRateLimit()) {
+        Logger.error(MODULE, '水群: 检测到 Telegram 速率限制，自动禁用');
+        await Storage.updateWaterSettings({ enabled: false, disabledReason: '速率限制' });
+        chrome.runtime.sendMessage({
+          action: 'water_chat_complete',
+          results: [{ groupName, message: randomMsg.text, success: false, result: '速率限制-已自动禁用' }],
+        }).catch(() => {});
+        return;
+      }
+
+      const entry = {
+        groupName: groupName,
+        message: randomMsg.text,
+        success: result.success,
+        result: result.message,
+      };
+      await Storage.addWaterHistory([entry]);
+
+      // 更新水群状态计数
+      const ws = await Storage.getWaterState();
+      await Storage.updateWaterState({
+        isRunning: false,
+        lastRunTime: new Date().toISOString(),
+        todayCount: (ws.todayCount || 0) + 1,
+      });
+
+      chrome.runtime.sendMessage({
+        action: 'water_chat_complete',
+        results: [entry],
+      }).catch(() => {});
+
+      Logger.info(MODULE, '水群任务完成: ' + (result.success ? '✅ 成功' : '❌ 失败'));
+
+    } catch (err) {
+      Logger.error(MODULE, '水群异常: ' + err.message);
+      const entry = { groupName: groupName, message: randomMsg.text, success: false, result: err.message };
+      await Storage.addWaterHistory([entry]);
+      chrome.runtime.sendMessage({ action: 'water_chat_complete', results: [entry] }).catch(() => {});
+    }
+  }
+
   // ─── 消息监听 ───
 
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -720,6 +939,32 @@
 
     if (msg.action === 'checkLogin') {
       checkLoginStatus().then(status => sendResponse({ isLoggedIn: status }));
+      return true;
+    }
+
+    // ── 水群指令 ──
+    if (msg.action === 'runWaterChat') {
+      Logger.info(MODULE, '收到水群指令');
+      runSingleWaterChat()
+        .then(() => sendResponse({ success: true }))
+        .catch(err => sendResponse({ success: false, error: err.message }));
+      return true;
+    }
+
+    if (msg.action === 'testWaterChat') {
+      const { groupName, message } = msg;
+      Logger.info(MODULE, '手动测试水群: ' + groupName + ' / ' + message);
+      (async () => {
+        const settings = await Storage.getSettings();
+        const opened = await openChat(groupName, settings);
+        if (!opened) {
+          sendResponse({ success: false, message: '无法打开群聊' });
+          return;
+        }
+        await AntiDetect.readingPause();
+        const result = await sendWaterMessage(message, settings);
+        sendResponse(result);
+      })();
       return true;
     }
   });

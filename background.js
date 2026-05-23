@@ -50,6 +50,11 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     SWLogger.debug('Background', '健康检查闹钟触发');
     await handleHealthCheck();
   }
+
+  if (alarm.name === 'tg_water_chat') {
+    SWLogger.info('Background', '===== 水群闹钟触发 =====');
+    await handleWaterChat();
+  }
 });
 
 // ─── 每日签到处理 ───
@@ -121,6 +126,128 @@ function setupDailyAlarm(settings) {
   // 健康检查闹钟
   chrome.alarms.create('tg_checkin_health', {
     periodInMinutes: 15,
+  });
+}
+
+// ══════════════════════════════════════
+// ─── 水群模块 ───
+// ══════════════════════════════════════
+
+/** 读取水群运行时状态（含每日计数） */
+function getWaterState() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get('water_state', (r) => {
+      const s = r.water_state || {};
+      const today = new Date().toDateString();
+      if (s.todayDate !== today) {
+        s.todayDate = today;
+        s.todayCount = 0;
+        s.everSentToday = false;
+      }
+      resolve(s);
+    });
+  });
+}
+
+async function handleWaterChat() {
+  const waterSettings = await getWaterSettings();
+  if (!waterSettings.enabled) {
+    SWLogger.info('Background', '水群已禁用，跳过');
+    return;
+  }
+
+  // ── 防御1: 每日发送上限 ──
+  const today = new Date().toDateString();
+  const todayState = await getWaterState();
+  const todayCount = todayState.todayDate === today ? (todayState.todayCount || 0) : 0;
+  const maxDaily = waterSettings.maxDaily || 50;
+  if (todayCount >= maxDaily) {
+    SWLogger.info('Background', `水群: 今日已发送 ${todayCount} 条，达到上限 ${maxDaily}，跳过`);
+    scheduleNextWaterChat(waterSettings);
+    return;
+  }
+
+  // ── 防御2: 活跃时段检查 ──
+  if (!isWithinActiveHours(waterSettings)) {
+    SWLogger.info('Background', '水群: 当前不在活跃时段，跳过');
+    scheduleNextWaterChat(waterSettings);
+    return;
+  }
+
+  SWLogger.info('Background', '开始派发水群任务');
+  await dispatchWaterChatToTab();
+  scheduleNextWaterChat(waterSettings);
+}
+
+function isWithinActiveHours(waterSettings) {
+  const now = new Date();
+  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+  const [startH, startM] = (waterSettings.activeHoursStart || '08:00').split(':').map(Number);
+  const [endH, endM] = (waterSettings.activeHoursEnd || '23:00').split(':').map(Number);
+  const startMin = startH * 60 + startM;
+  const endMin = endH * 60 + endM;
+  return currentMinutes >= startMin && currentMinutes <= endMin;
+}
+
+function scheduleNextWaterChat(waterSettings) {
+  const intervalMin = waterSettings.intervalMin || 30;
+  const intervalMax = waterSettings.intervalMax || 60;
+
+  // ── 防御3: 首次启用时强制等待间隔，避免立即触发 ──
+  const minDelay = intervalMin;
+  const range = intervalMax - minDelay;
+  const delayMs = (Math.random() * range + minDelay) * 60000;
+  const nextTime = Date.now() + delayMs;
+
+  chrome.alarms.clear('tg_water_chat', () => {
+    chrome.alarms.create('tg_water_chat', { when: nextTime });
+    const waitMin = Math.round(delayMs / 60000);
+    SWLogger.info('Background', `下次水群: ${new Date(nextTime).toLocaleString('zh-CN')} (${waitMin}分钟后)`);
+
+    // 更新下次执行时间到状态
+    chrome.storage.local.get('water_state', (r) => {
+      const current = r.water_state || {};
+      chrome.storage.local.set({
+        water_state: { ...current, nextRunTime: new Date(nextTime).toISOString() }
+      });
+    });
+  });
+}
+
+async function dispatchWaterChatToTab() {
+  try {
+    const tabs = await chrome.tabs.query({
+      url: 'https://web.telegram.org/a/*'
+    });
+
+    if (tabs.length > 0) {
+      const tab = tabs[0];
+      SWLogger.info('Background', `向标签页 #${tab.id} 发送水群指令`);
+      await chrome.tabs.sendMessage(tab.id, { action: 'runWaterChat' });
+    } else {
+      SWLogger.info('Background', '水群: 未找到 Telegram 标签页');
+    }
+  } catch (err) {
+    SWLogger.error('Background', '水群派发失败', err.message);
+  }
+}
+
+function getWaterSettings() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get('water_settings', (result) => {
+      const defaults = {
+        enabled: false,
+        intervalMin: 30,
+        intervalMax: 60,
+        maxDaily: 50,
+        messages: [],
+        targetGroups: [],
+        activeHoursStart: '08:00',
+        activeHoursEnd: '23:00',
+        stopOnVerification: true,
+      };
+      resolve({ ...defaults, ...result.water_settings });
+    });
   });
 }
 
@@ -245,6 +372,68 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       .catch(err => sendResponse({ ok: false, error: err.message }));
     return true;
   }
+
+  // ── 水群消息 ──
+
+  // Popup 请求开启/关闭水群
+  if (msg.action === 'toggle_water_chat') {
+    getWaterSettings().then(ws => {
+      if (ws.enabled) {
+        scheduleNextWaterChat(ws);
+        sendResponse({ ok: true });
+      } else {
+        chrome.alarms.clear('tg_water_chat', () => {
+          sendResponse({ ok: true });
+        });
+      }
+    });
+    return true;
+  }
+
+  // Content Script 报告水群完成
+  if (msg.action === 'water_chat_complete') {
+    SWLogger.info('Background', `水群任务完成`, msg.results);
+
+    // ── 更新每日发送计数 ──
+    chrome.storage.local.get('water_state', (r) => {
+      const ws = r.water_state || {};
+      const today = new Date().toDateString();
+      if (ws.todayDate !== today) {
+        ws.todayDate = today;
+        ws.todayCount = 0;
+      }
+      ws.todayCount = (ws.todayCount || 0) + 1;
+      ws.everSentToday = true;
+      ws.lastSentAt = new Date().toISOString();
+      chrome.storage.local.set({ water_state: ws });
+    });
+
+    sendResponse({ ok: true });
+    return;
+  }
+
+  // Popup 请求获取水群状态
+  if (msg.action === 'get_water_status') {
+    chrome.alarms.get('tg_water_chat', (alarm) => {
+      chrome.storage.local.get(['water_state', 'water_settings'], (result) => {
+        sendResponse({
+          alarm: alarm ? { scheduledTime: alarm.scheduledTime } : null,
+          state: result.water_state || {},
+          settings: result.water_settings || {},
+        });
+      });
+    });
+    return true;
+  }
+
+  // Popup 请求手动触发一次水群
+  if (msg.action === 'manual_water_chat') {
+    SWLogger.info('Background', '手动触发单次水群');
+    dispatchWaterChatToTab()
+      .then(() => sendResponse({ ok: true }))
+      .catch(err => sendResponse({ ok: false, error: err.message }));
+    return true;
+  }
 });
 
 // ─── 安装/更新事件 ───
@@ -265,6 +454,12 @@ chrome.runtime.onInstalled.addListener((details) => {
     getSettings().then(settings => {
       if (settings.enabled) {
         setupDailyAlarm(settings);
+      }
+    });
+    // 恢复水群闹钟
+    getWaterSettings().then(ws => {
+      if (ws.enabled) {
+        scheduleNextWaterChat(ws);
       }
     });
   }
@@ -290,6 +485,13 @@ chrome.runtime.onStartup.addListener(() => {
         dispatchCheckinToTab();
       }, 30000);
     }
+
+    // 恢复水群闹钟
+    getWaterSettings().then(ws => {
+      if (ws.enabled) {
+        scheduleNextWaterChat(ws);
+      }
+    });
   });
 });
 
