@@ -130,16 +130,35 @@
     ],
   };
 
-  // ─── 选择器查找 ───
+  // ─── 选择器查找（带 LRU 缓存提升性能）───
+
+  // 选择器缓存：记录最近一次命中的选择器索引，避免每次都从头遍历
+  const _selectorCache = new Map();
 
   /**
    * 按优先级尝试多个选择器，返回第一个找到的元素
+   * 使用 LRU 缓存，优先尝试上次命中的选择器
    */
   function queryFirst(selectors, parent = document) {
-    for (const sel of selectors) {
+    const cacheKey = JSON.stringify(selectors);
+    const cachedIdx = _selectorCache.get(cacheKey);
+
+    // 优先尝试缓存的命中选择器
+    if (cachedIdx != null) {
       try {
-        const el = parent.querySelector(sel);
+        const el = parent.querySelector(selectors[cachedIdx]);
         if (el) return el;
+      } catch (e) { /* 过期，降级全扫描 */ }
+      _selectorCache.delete(cacheKey);
+    }
+
+    for (let i = 0; i < selectors.length; i++) {
+      try {
+        const el = parent.querySelector(selectors[i]);
+        if (el) {
+          _selectorCache.set(cacheKey, i);
+          return el;
+        }
       } catch (e) {
         // 选择器语法错误，跳过
       }
@@ -148,10 +167,24 @@
   }
 
   function queryAll(selectors, parent = document) {
-    for (const sel of selectors) {
+    const cacheKey = JSON.stringify(selectors);
+    const cachedIdx = _selectorCache.get(cacheKey);
+
+    if (cachedIdx != null) {
       try {
-        const els = parent.querySelectorAll(sel);
+        const els = parent.querySelectorAll(selectors[cachedIdx]);
         if (els.length > 0) return Array.from(els);
+      } catch (e) { /* 过期 */ }
+      _selectorCache.delete(cacheKey);
+    }
+
+    for (let i = 0; i < selectors.length; i++) {
+      try {
+        const els = parent.querySelectorAll(selectors[i]);
+        if (els.length > 0) {
+          _selectorCache.set(cacheKey, i);
+          return Array.from(els);
+        }
       } catch (e) {
         // 跳过
       }
@@ -159,7 +192,23 @@
     return [];
   }
 
-  // ─── MutationObserver 等待元素出现 ───
+  // ─── 共享 MutationObserver（避免每次 waitForElement 创建新实例）───
+
+  // 全局共享 observer，统一监听 body 变化
+  let _sharedObserver = null;
+  const _observerCallbacks = new Set();
+
+  function _getSharedObserver() {
+    if (!_sharedObserver) {
+      _sharedObserver = new MutationObserver(() => {
+        _observerCallbacks.forEach(cb => {
+          try { cb(); } catch (e) { /* 忽略回调异常 */ }
+        });
+      });
+      _sharedObserver.observe(document.body, { childList: true, subtree: true });
+    }
+    return _sharedObserver;
+  }
 
   /**
    * 等待指定选择器的元素出现在 DOM 中
@@ -170,28 +219,57 @@
    */
   function waitForElement(selectors, timeout = 15000, root = document.body) {
     const selArray = Array.isArray(selectors) ? selectors : [selectors];
-    return new Promise((resolve) => {
+
+    // 使用共享 observer（性能优化）
+    if (root === document.body || root === document) {
       const existing = queryFirst(selArray);
+      if (existing) return Promise.resolve(existing);
+
+      return new Promise((resolve) => {
+        let resolved = false;
+        const callback = () => {
+          if (resolved) return;
+          const el = queryFirst(selArray);
+          if (el) {
+            resolved = true;
+            _observerCallbacks.delete(callback);
+            resolve(el);
+          }
+        };
+        _observerCallbacks.add(callback);
+        _getSharedObserver();
+
+        setTimeout(() => {
+          if (resolved) return;
+          resolved = true;
+          _observerCallbacks.delete(callback);
+          resolve(queryFirst(selArray));
+        }, timeout);
+      });
+    }
+
+    // 非 body root 的降级：使用独立 observer
+    return new Promise((resolve) => {
+      const existing = queryFirst(selArray, root);
       if (existing) return resolve(existing);
 
       let resolved = false;
       const observer = new MutationObserver(() => {
         if (resolved) return;
-        const el = queryFirst(selArray);
+        const el = queryFirst(selArray, root);
         if (el) {
           resolved = true;
           observer.disconnect();
           resolve(el);
         }
       });
-
       observer.observe(root, { childList: true, subtree: true });
 
       setTimeout(() => {
         if (resolved) return;
         resolved = true;
         observer.disconnect();
-        resolve(queryFirst(selArray));
+        resolve(queryFirst(selArray, root));
       }, timeout);
     });
   }
@@ -203,79 +281,58 @@
    * @returns {Promise<HTMLElement|null>}
    */
   function waitForEditableInput(timeout = 15000) {
-    const start = Date.now();
-
     /** 校验元素是否是真正可编辑的输入框 */
     function findRealEditable() {
-      // 策略1：直接找 contentEditable=true 的 div
       const ceEls = document.querySelectorAll('div[contenteditable="true"]');
+      // 优先找有 placeholder 的
       for (const el of ceEls) {
-        // 排除明显不是消息输入框的元素（太小的、隐藏的）
         const rect = el.getBoundingClientRect();
         if (rect.width < 50 || rect.height < 20) continue;
-        if (rect.width > window.innerWidth * 0.9) continue; // 太宽的也不是
-        // 优先找有 placeholder 属性的（Telegram 输入框特征）
+        if (rect.width > window.innerWidth * 0.9) continue;
         if (el.dataset && el.dataset.placeholder || el.getAttribute('data-placeholder')) {
-          Logger.debug(MODULE, '找到可编辑输入框(placeholder): id=' + el.id + ', class=' + (typeof el.className === 'string' ? el.className.slice(0, 50) : String(el.className).slice(0, 50)));
+          Logger.debug(MODULE, '找到可编辑输入框(placeholder): id=' + el.id);
           return el;
         }
       }
-      // 如果没找到带 placeholder 的，返回第一个尺寸合理的
+      // 回退：第一个尺寸合理且不在侧边栏的
       for (const el of ceEls) {
         const rect = el.getBoundingClientRect();
         if (rect.width < 50 || rect.height < 20) continue;
-        if (el.closest('.chat-list, .left-column, .sidebar, header, nav')) continue; // 排除侧边栏等区域
+        if (el.closest('.chat-list, .left-column, .sidebar, header, nav')) continue;
         Logger.debug(MODULE, '找到可编辑输入框(回退): id=' + el.id + ', size=' + Math.round(rect.width) + 'x' + Math.round(rect.height));
         return el;
       }
       return null;
     }
 
-    return new Promise((resolve) => {
-      // 先检查
-      const existing = findRealEditable();
-      if (existing) return resolve(existing);
+    // 使用共享 observer
+    const existing = findRealEditable();
+    if (existing) return Promise.resolve(existing);
 
+    return new Promise((resolve) => {
       let resolved = false;
-      const observer = new MutationObserver(() => {
+      const callback = () => {
         if (resolved) return;
         const el = findRealEditable();
         if (el) {
           resolved = true;
-          observer.disconnect();
+          _observerCallbacks.delete(callback);
           resolve(el);
         }
-      });
+      };
+      _observerCallbacks.add(callback);
+      _getSharedObserver();
 
-      observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['contenteditable'] });
-
-      // 超时：输出诊断信息
       setTimeout(() => {
         if (resolved) return;
         resolved = true;
-        observer.disconnect();
+        _observerCallbacks.delete(callback);
 
-        // 诊断：列出页面上所有 contentEditable 相关元素
         const allDivs = document.querySelectorAll('div[id*="input"], div[id*="message"], div[class*="input"], div[class*="composer"], div[contenteditable]');
-        function getRectStr(el) {
-          try { const r = el.getBoundingClientRect(); return Math.round(r.width) + 'x' + Math.round(r.height); }
-          catch (err) { return '?'; }
-        }
-        function getClassNameSafe(el) {
-          try { const cn = el.className; return typeof cn === 'string' ? cn.slice(0, 60) : String(cn).slice(0, 60); }
-          catch { return ''; }
-        }
-        Logger.warn(MODULE, 'waitForEditableInput 超时(' + timeout + 'ms)，页面 DOM 诊断:', {
+        Logger.warn(MODULE, 'waitForEditableInput 超时(' + timeout + 'ms)，DOM 诊断:', {
           totalContentEditable: document.querySelectorAll('div[contenteditable="true"]').length,
-          candidateElements: Array.from(allDivs).slice(0, 10).map(function(e) {
-            return {
-              tag: e.tagName,
-              id: e.id,
-              class: getClassNameSafe(e),
-              ce: e.contentEditable,
-              rect: getRectStr(e),
-              visible: e.offsetParent !== null,
-            };
+          candidates: Array.from(allDivs).slice(0, 10).map(function(e) {
+            return { tag: e.tagName, id: e.id, ce: e.contentEditable, visible: e.offsetParent !== null };
           })
         });
         resolve(null);
@@ -335,10 +392,101 @@
   // ─── 核心签到流程 ───
 
   /**
+   * 彻底退出搜索模式，确保 UI 恢复到聊天列表的干净状态
+   * 这是防止多群漏签的关键——不清干净的话下一个群的搜索结果会被污染
+   */
+  async function resetSearchState(settings) {
+    Logger.debug(MODULE, '重置搜索状态...');
+
+    // 策略1：查找搜索框并用 JS 清空
+    const searchInput = queryFirst(Selectors.searchInput);
+    if (searchInput && searchInput.tagName === 'INPUT') {
+      // 使用原生 setter + dispatch 确保 React 感知
+      const nativeSetter = Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype, 'value'
+      )?.set;
+      if (nativeSetter) {
+        nativeSetter.call(searchInput, '');
+      } else {
+        searchInput.value = '';
+      }
+      searchInput.dispatchEvent(new Event('input', { bubbles: true }));
+      searchInput.dispatchEvent(new Event('change', { bubbles: true }));
+      await AntiDetect.sleep(200);
+    }
+
+    // 策略2：查找并点击搜索栏的清除按钮（X），通常更可靠
+    const clearButtons = [
+      'button[aria-label="Clear"]',
+      'button[aria-label="清除"]',
+      '.search-input button',
+      '.SearchInput button',
+      '.input-search-wrapper button',
+      'svg[aria-label="Clear"]',
+    ];
+    for (const sel of clearButtons) {
+      try {
+        const btn = document.querySelector(sel);
+        if (btn) {
+          await AntiDetect.humanClick(btn, settings);
+          await AntiDetect.sleep(300);
+          Logger.debug(MODULE, '已点击搜索清除按钮');
+          break;
+        }
+      } catch (e) { /* ignore */ }
+    }
+
+    // 策略3：按 Escape 退出搜索聚焦状态（但不关闭聊天！）
+    // 注意：只有在搜索框仍然有焦点时才按 Escape
+    const activeEl = document.activeElement;
+    if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.isContentEditable)) {
+      const inSearchArea = activeEl.closest('.left-column, .sidebar, .chat-list, header, nav');
+      if (inSearchArea || activeEl.closest('#LeftColumn')) {
+        activeEl.blur();
+        await AntiDetect.sleep(100);
+      }
+    }
+
+    // 策略4：验证搜索已真正清空——等待搜索结果/过滤消失
+    Logger.debug(MODULE, '验证搜索状态已重置...');
+    await AntiDetect.sleep(500);
+  }
+
+  /**
+   * 验证聊天窗口是否已成功加载
+   * @returns {boolean}
+   */
+  async function verifyChatLoaded(timeout = 10000) {
+    // 等待消息区域或输入框出现，证明聊天窗口已加载
+    const startTime = Date.now();
+    while (Date.now() - startTime < timeout) {
+      // 检查消息输入框是否可见
+      const inputEl = document.querySelector('div[contenteditable="true"]');
+      if (inputEl) {
+        const rect = inputEl.getBoundingClientRect();
+        if (rect.width > 50 && rect.height > 20) {
+          Logger.debug(MODULE, `聊天窗口加载验证通过 (${Date.now() - startTime}ms)`);
+          return true;
+        }
+      }
+      // 检查聊天标题区域是否出现（表示已经进入了聊天）
+      const chatHeader = document.querySelector('.ChatInfo, .middle-column .info, #MiddleColumn .info');
+      if (chatHeader) return true;
+
+      await AntiDetect.sleep(300);
+    }
+    Logger.warn(MODULE, `聊天窗口加载验证超时 (${timeout}ms)`);
+    return false;
+  }
+
+  /**
    * 搜索并打开群聊
    */
   async function openChat(groupName, settings) {
     Logger.info(MODULE, `搜索群聊: ${groupName}`);
+
+    // 0. ★ 先彻底退出之前的搜索状态（防漏签关键！）
+    await resetSearchState(settings);
 
     // 1. 找到并点击搜索框
     const searchInput = await waitForElement(Selectors.searchInput, 10000);
@@ -346,13 +494,12 @@
       Logger.error(MODULE, '未找到搜索输入框');
       return false;
     }
-    Logger.debug(MODULE, `找到搜索框: tag=${searchInput.tagName}, type=${searchInput.type}`);
+    Logger.debug(MODULE, `找到搜索框: tag=${searchInput.tagName}`);
 
     await AntiDetect.humanClick(searchInput, settings);
-    await AntiDetect.humanDelay(settings);
+    await AntiDetect.humanDelay(settings, 0.5);
 
-    // 2. 直接填入群名（搜索框不需要拟人化输入，效率优先）
-    // 使用原生 setter 确保 React 能感知值变化
+    // 2. 填入群名
     const nativeSetter = Object.getOwnPropertyDescriptor(
       HTMLInputElement.prototype, 'value'
     )?.set;
@@ -365,74 +512,83 @@
       searchInput.dispatchEvent(new Event('input', { bubbles: true }));
       searchInput.dispatchEvent(new Event('change', { bubbles: true }));
     }
-    Logger.info(MODULE, `已直接填入搜索关键词: "${groupName}"`);
+    Logger.info(MODULE, `已填入搜索关键词: "${groupName}"`);
 
     // 3. 等待搜索结果出现
     Logger.debug(MODULE, '等待搜索结果 DOM 出现...');
     const searchResult = await waitForElement(Selectors.chatItem, 8000);
     if (!searchResult) {
       Logger.error(MODULE, `搜索"${groupName}"超时`);
-      cleanupSearch(searchInput);
+      await resetSearchState(settings);
       return false;
     }
-    await AntiDetect.sleep(500); // 额外等待渲染
+    await AntiDetect.sleep(500);
 
     const chatItems = queryAll(Selectors.chatItem);
     Logger.debug(MODULE, `搜索结果: ${chatItems.length} 个聊天项`);
 
     if (chatItems.length === 0) {
       Logger.error(MODULE, `搜索"${groupName}"无结果`);
-      cleanupSearch(searchInput);
+      await resetSearchState(settings);
       return false;
     }
 
     // 查找匹配项 — 多策略获取群名
     let targetItem = null;
+    let bestMatchScore = 0;
+
     for (const item of chatItems) {
       let title = '';
       const titleEl = queryFirst(Selectors.chatItemTitle, item);
       if (titleEl) {
         title = titleEl.textContent.trim();
       } else {
-        // 兜底：直接读 item 文本，取第一行（通常是群名）
         title = (item.textContent || '').trim().split('\n')[0].trim();
       }
 
       Logger.debug(MODULE, `搜索结果项: "${title.slice(0, 35) || '(empty)'}"`);
 
-      if (title && (title.includes(groupName) || groupName.includes(title))) {
+      // 打分匹配：完全相等 > 包含关系
+      let score = 0;
+      if (title === groupName) {
+        score = 3;  // 精确匹配
+      } else if (title.startsWith(groupName) || groupName.startsWith(title)) {
+        score = 2;  // 前缀匹配
+      } else if (title.includes(groupName) || groupName.includes(title)) {
+        score = 1;  // 子串匹配
+      }
+
+      if (score > bestMatchScore) {
+        bestMatchScore = score;
         targetItem = item;
-        Logger.info(MODULE, `精确匹配到群: ${title}`);
-        break;
+        if (score === 3) break; // 精确匹配直接确定
       }
     }
 
     if (!targetItem) {
       Logger.warn(MODULE, `未精确匹配，使用第一个结果`);
       targetItem = chatItems[0];
+    } else {
+      Logger.info(MODULE, `匹配到群 (score=${bestMatchScore})`);
     }
 
     // 4. 点击打开群聊
     await AntiDetect.humanClick(targetItem, settings);
     Logger.debug(MODULE, '已点击群组，等待聊天窗口加载...');
-    await AntiDetect.humanDelay(settings, 2);
 
-    // 5. 清理搜索框
-    cleanupSearch(searchInput);
-    await AntiDetect.humanDelay(settings, 0.5);
+    // ★ 等待聊天窗口确认加载完成
+    const loaded = await verifyChatLoaded(10000);
+    if (!loaded) {
+      Logger.error(MODULE, `群 ${groupName} 聊天窗口未成功加载`);
+      await resetSearchState(settings);
+      return false;
+    }
+
+    // 5. 清理搜索状态
+    await resetSearchState(settings);
 
     Logger.info(MODULE, `已打开群聊: ${groupName}`);
     return true;
-  }
-
-  function cleanupSearch(searchInput) {
-    // 只清空搜索框的值，不派发键盘事件
-    // ⚠️ Escape 键会触发 Telegram Web A 关闭当前聊天、回到搜索框
-    if (!searchInput) return;
-    if (searchInput.tagName === 'INPUT') {
-      searchInput.value = '';
-      searchInput.dispatchEvent(new Event('input', { bubbles: true }));
-    }
   }
 
   /**
@@ -607,12 +763,25 @@
     return { success: true, message: '命令已发送' };
   }
 
+  // ─── 批量存储优化：缓存 settings/groups，避免循环中重复读取 ───
+  let _cachedSettings = null;
+  let _cachedGroups = null;
+
+  function _clearRunCache() {
+    _cachedSettings = null;
+    _cachedGroups = null;
+  }
+
   // ─── 主签到流程 ───
 
   async function runCheckin() {
     Logger.info(MODULE, '========== 开始签到 ==========');
 
+    _clearRunCache();
+
     const settings = await Storage.getSettings();
+    _cachedSettings = settings;
+
     if (!settings.enabled) {
       Logger.info(MODULE, '签到功能已禁用');
       return;
@@ -631,6 +800,7 @@
     }
 
     const groups = await Storage.getGroups();
+    _cachedGroups = groups;
     const enabledGroups = groups.filter(g => g.enabled && g.status !== 'error');
     if (enabledGroups.length === 0) {
       Logger.info(MODULE, '无待签到群组');
@@ -640,9 +810,18 @@
     const shuffled = AntiDetect.shuffle(enabledGroups);
     await Storage.updateState({ isRunning: true, currentTask: `签到 ${shuffled.length} 个群组` });
 
+    // ★ 批量写入收集器：减少 chrome.storage 写入次数
     const results = [];
+    const groupUpdates = [];
+    let shouldStopAll = false; // 风控全局停止标志
 
     for (const group of shuffled) {
+      if (shouldStopAll) {
+        Logger.warn(MODULE, `全局停止标志已设置，跳过群: ${group.name}`);
+        results.push({ group, result: { success: false, message: '已被风控中断', reason: 'verification' } });
+        continue;
+      }
+
       Logger.info(MODULE, `--- ${group.name} (${group.keyword}) ---`);
 
       let result = null;
@@ -658,13 +837,16 @@
           await AntiDetect.readingPause();
           result = await sendCheckinCommand(group.keyword, settings);
           if (result.success) break;
+
+          // ★ 风控检测 → 设置全局停止标志
           if (result.reason === 'verification') {
             Logger.error(MODULE, '验证码拦截，停止全部操作');
-            await Storage.updateGroup(group.id, { status: 'error' });
+            shouldStopAll = true;
+            groupUpdates.push({ id: group.id, updates: { status: 'error' } });
             chrome.runtime.sendMessage({
               action: 'send_notification',
               title: '⚠️ Telegram 签到 - 需人工处理',
-              message: `群 "${group.name}" 触发了验证码，已停止自动化`,
+              message: `群 "${group.name}" 触发了验证码，已停止全部自动化`,
             }).catch(() => {});
             results.push({ group, result });
             break;
@@ -685,18 +867,36 @@
       }
 
       if (result) {
-        await Storage.updateCheckinResult(group.id, result);
+        // 收集结果，稍后批量写入
+        groupUpdates.push({
+          id: group.id,
+          updates: {
+            lastCheckin: new Date().toISOString(),
+            lastResult: result,
+            status: result.success ? 'normal' : (result.reason === 'verification' ? 'error' : undefined)
+          }
+        });
         results.push({ group, result });
       }
-      await AntiDetect.humanDelay(settings, 3, randInt(3000, 6000));
+
+      if (!shouldStopAll) {
+        await AntiDetect.humanDelay(settings, 3, randInt(3000, 6000));
+      }
+    }
+
+    // ★ 批量写入所有结果（一次 I/O 替代 N 次）
+    if (groupUpdates.length > 0) {
+      await Storage.batchUpdateCheckinResults(groupUpdates);
     }
 
     Logger.info(MODULE, '========== 签到完成 ==========', {
       total: shuffled.length,
       success: results.filter(r => r.result?.success).length,
       fail: results.filter(r => !r.result?.success).length,
+      stoppedByVerification: shouldStopAll,
     });
 
+    _clearRunCache();
     await Storage.updateState({ isRunning: false, currentTask: null });
     chrome.runtime.sendMessage({ action: 'checkin_complete', results }).catch(() => {});
   }
